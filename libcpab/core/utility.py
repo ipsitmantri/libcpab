@@ -14,7 +14,7 @@ import os, random
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.linalg as la
-from scipy import transpose, compress
+from numpy import transpose, compress
 
 #%%
 class params:

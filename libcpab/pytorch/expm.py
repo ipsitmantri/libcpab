@@ -24,7 +24,7 @@ def expm(A):
     U, V = pade13(Ascaled)
     P = U + V
     Q = -U + V
-    R, _ = torch.solve(P, Q) # solve P = Q*R
+    R = torch.linalg.solve(Q, P)
     
     # Unsquaring step    
     n = n_squarings.max()
