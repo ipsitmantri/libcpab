@@ -24,7 +24,7 @@ class Cpab(object):
         backend: string, computational backend to use. Choose between 
             "numpy" (default), "pytorch" or "tensorflow"
         
-        device: string, either "cpu" (default) or "gpu". For the numpy backend
+        device: string, either "cpu" (default) or "gpu" or "cuda". For the numpy backend
             only the "cpu" option is valid
         
         zero_boundary: bool, determines is the velocity at the boundary is zero 
@@ -490,8 +490,8 @@ class Cpab(object):
             '''All elements of tess_size must be positive'''
         assert backend in ['numpy', 'tensorflow', 'pytorch'], \
             '''Unknown backend, choose between 'numpy', 'tensorflow' or 'pytorch' '''
-        assert device in ['cpu', 'gpu'], \
-            '''Unknown device, choose between 'cpu' or 'gpu' '''
+        assert device in ['cpu', 'gpu', 'cuda'], \
+            '''Unknown device, choose between 'cpu', 'gpu', or 'cuda' '''
         if backend == 'numpy':
             assert device == 'cpu', '''Cannot use gpu with numpy backend '''
         assert type(zero_boundary) == bool, \
@@ -514,7 +514,7 @@ class Cpab(object):
             
     #%%
     def _check_device(self, x):
-        """ Asssert that x is on the same device (cpu or gpu) as the class """
+        """ Asssert that x is on the same device (cpu or gpu or cuda) as the class """
         assert self.backend.check_device(x, self.device), '''Input is placed on 
             device {0} but the class expects it to be on device {1}'''.format(
             str(x.device), self.device)
