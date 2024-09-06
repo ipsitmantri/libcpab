@@ -54,19 +54,22 @@ try:
                                _dir + '/../core/cpab_ops.cu'],
                     verbose=_verbose,
                     with_cuda=True)
-    _gpu_succes = True
     if _verbose:
         print(70*'=')
-        print('succesfully compiled gpu source')
+        print('Successfully compiled gpu source, but using slow implementation')
         print(70*'=')
 except Exception as e:
     cpab_gpu = _notcompiled()
-    _gpu_succes = False
     if _verbose:
         print(70*'=')
-        print('Unsuccesfully compiled gpu source')
+        print('Unsuccessfully compiled gpu source')
         print('Error was: ')
         print(e)
+        print('Using slow implementation')
+        print(70*'=')
+
+# Always use slow implementation
+_gpu_succes = False
 
 #%%
 def CPAB_transformer(points, theta, params):
@@ -92,7 +95,7 @@ def CPAB_transformer_slow(points, theta, params):
     n_points = points.shape[-1]
     
     # Create homogenous coordinates
-    ones = torch.ones((n_theta, 1, n_points)).to(points.device)
+    ones = torch.ones((n_theta, 1, n_points), dtype=points.dtype, device=points.device)
     if len(points.shape) == 2:
         newpoints = points[None].repeat(n_theta, 1, 1) # [n_theta, ndim, n_points]
     else:
@@ -103,10 +106,11 @@ def CPAB_transformer_slow(points, theta, params):
     newpoints = newpoints[:,:,None] # [n_theta*n_points, ndim+1, 1]
     
     # Get velocity fields
-    B = torch.tensor(params.basis, dtype=torch.float32, device=theta.device)
-    Avees = torch.matmul(B, theta.t())
+    B = torch.tensor(params.basis, dtype=theta.dtype, device=theta.device)
+    with torch.cuda.amp.autocast(enabled=torch.is_autocast_enabled()):
+        Avees = torch.matmul(B, theta.t())
     As = Avees.t().reshape(n_theta*params.nC, *params.Ashape)
-    zero_row = torch.zeros(n_theta*params.nC, 1, params.ndim+1, device=As.device)
+    zero_row = torch.zeros(n_theta*params.nC, 1, params.ndim+1, dtype=As.dtype, device=As.device)
     AsSquare = torch.cat([As, zero_row], dim=1)
     
     # Take matrix exponential
@@ -121,7 +125,8 @@ def CPAB_transformer_slow(points, theta, params):
     for i in range(params.nstepsolver):
         idx = findcellidx(params.ndim, newpoints[:,:,0].t(), params.nc) + batch_idx
         Tidx = Trels[idx.long()]
-        newpoints = torch.matmul(Tidx, newpoints)
+        with torch.cuda.amp.autocast(enabled=torch.is_autocast_enabled()):
+            newpoints = torch.matmul(Tidx, newpoints)
     
     newpoints = newpoints.squeeze()[:,:params.ndim].t()
     newpoints = newpoints.reshape(params.ndim, n_theta, n_points).permute(1,0,2)
