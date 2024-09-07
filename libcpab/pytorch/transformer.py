@@ -11,6 +11,7 @@ from torch.utils.cpp_extension import load
 from .findcellidx import findcellidx
 from .expm import expm
 from ..core.utility import get_dir
+import torch.cuda.amp as amp
 
 #%%
 class _notcompiled:
@@ -95,7 +96,11 @@ def CPAB_transformer_slow(points, theta, params):
     n_points = points.shape[-1]
     
     # Create homogenous coordinates
-    ones = torch.ones((n_theta, 1, n_points), dtype=points.dtype, device=points.device)
+    ones = torch.ones((n_theta, 1, n_points), dtype=torch.float32, device=points.device)
+    # Normalize initial points to be between -1 and 1
+    points_min = points.min()
+    points_max = points.max()
+    points_normalized = 2 * (points - points_min) / (points_max - points_min) - 1
     if len(points.shape) == 2:
         newpoints = points[None].repeat(n_theta, 1, 1) # [n_theta, ndim, n_points]
     else:
@@ -106,11 +111,11 @@ def CPAB_transformer_slow(points, theta, params):
     newpoints = newpoints[:,:,None] # [n_theta*n_points, ndim+1, 1]
     
     # Get velocity fields
-    B = torch.tensor(params.basis, dtype=theta.dtype, device=theta.device)
-    with torch.cuda.amp.autocast(enabled=torch.is_autocast_enabled()):
+    B = torch.tensor(params.basis, dtype=torch.float32, device=theta.device)
+    with amp.autocast(enabled=True):
         Avees = torch.matmul(B, theta.t())
     As = Avees.t().reshape(n_theta*params.nC, *params.Ashape)
-    zero_row = torch.zeros(n_theta*params.nC, 1, params.ndim+1, dtype=As.dtype, device=As.device)
+    zero_row = torch.zeros(n_theta*params.nC, 1, params.ndim+1, dtype=torch.float32, device=As.device)
     AsSquare = torch.cat([As, zero_row], dim=1)
     
     # Take matrix exponential
@@ -122,14 +127,38 @@ def CPAB_transformer_slow(points, theta, params):
     batch_idx = batch_idx.t().flatten().to(theta.device)
     
     # Do integration
+    # print("nstepsolver", params.nstepsolver)
     for i in range(params.nstepsolver):
         idx = findcellidx(params.ndim, newpoints[:,:,0].t(), params.nc) + batch_idx
         Tidx = Trels[idx.long()]
-        with torch.cuda.amp.autocast(enabled=torch.is_autocast_enabled()):
-            newpoints = torch.matmul(Tidx, newpoints)
-    
+        
+        # Ensure Tidx is in float32
+        Tidx = Tidx.float()
+        
+        # Normalize Tidx
+        Tidx_norm = torch.norm(Tidx, dim=(1,2), keepdim=True)
+        Tidx_normalized = Tidx / Tidx_norm.clamp(min=1e-8)
+
+        with amp.autocast(enabled=False):
+            newpoints_before = newpoints.float()
+            
+            # Apply transformation
+            newpoints = torch.matmul(Tidx_normalized, newpoints_before)
+            
+            # Renormalize newpoints
+            newpoints_norm = torch.norm(newpoints, dim=1, keepdim=True)
+            newpoints = newpoints / newpoints_norm.clamp(min=1e-8)
+
+        # Check for NaN or Inf
+        if torch.isnan(newpoints).any() or torch.isinf(newpoints).any():
+            print(f"NaN or Inf detected at step {i}")
+            print(f"Tidx min: {Tidx.min()}, max: {Tidx.max()}")
+            print(f"newpoints_before min: {newpoints_before.min()}, max: {newpoints_before.max()}")
+            return None
+
     newpoints = newpoints.squeeze()[:,:params.ndim].t()
     newpoints = newpoints.reshape(params.ndim, n_theta, n_points).permute(1,0,2)
+    newpoints = 0.5 * (newpoints + 1) * (points_max - points_min) + points_min
     return newpoints
 
 #%%
